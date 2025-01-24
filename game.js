@@ -1,16 +1,9 @@
 const crypto = require('crypto');
 const readline = require('readline');
-const Table = require('cli-table'); // A 3rd-party library for rendering tables in the console
-
-class Dice {
-    constructor(values) {
-        this.values = values;
-    }
-
-    roll(index) {
-        return this.values[index];
-    }
-}
+const Table = require('cli-table');
+const Dice = require('./dice');
+const HMACGenerator = require('./hmac'); 
+const HelpDisplay = require('./help'); 
 
 class Game {
     constructor(dice) {
@@ -20,10 +13,18 @@ class Game {
         this.computerDice = null;
     }
 
+
+    generateHMACValue(range) {
+        return HMACGenerator.generateHMACValue(range);  // Call the static method of HMACGenerator class
+    }
+    
+    displayHelp() {
+        const helpDisplay = new HelpDisplay(this.dice);  // Create an instance of HelpDisplay
+        helpDisplay.display();
+    }
+
     determineFirstPlayer() {
-        const key = crypto.randomBytes(32);
-        const value = Math.floor(Math.random() * 2);
-        const hmac = crypto.createHmac('sha3-256', key).update(value.toString()).digest('hex');
+        const { key, value, hmac } = this.generateHMACValue(2);
         console.log(`I selected a random value in the range 0..1 (HMAC=${hmac}).`);
         console.log("Try to guess my selection.");
         console.log("0 - 0");
@@ -34,39 +35,20 @@ class Game {
     }
 
     generateFairThrow() {
-        const key = crypto.randomBytes(32);
-        const value = Math.floor(Math.random() * 6); // Generating a face index (0 to 5)
-        const hmac = crypto.createHmac('sha3-256', key).update(value.toString()).digest('hex');
+        const { key, value, hmac } = this.generateHMACValue(6);
+        const randomValue = value % 6;  // Ensure the value is between 0 and 5
         console.log(`I selected a random value in the range 0..5 (HMAC=${hmac}).`);
-        return { key, value };
-    }
-
-    displayHelp() {
-        console.log("Help: This is a non-transitive dice game where each player selects a dice and rolls it. The highest roll wins.");
-
-        // Creating the table
-        const table = new Table({
-            head: ['User dice \\ Computer dice', ...this.dice.map((_, index) => index.toString())],
-            colWidths: Array(this.dice.length + 1).fill(15)
-        });
-
-        this.dice.forEach((userDie, userIndex) => {
-            const row = [userDie.values.join(',')];
-            this.dice.forEach((computerDie, computerIndex) => {
-                if (userIndex === computerIndex) {
-                    row.push('- (0.3333)'); // Placeholder for same dice probability
-                } else {
-                    const winProbability = this.calculateWinProbability(userDie, computerDie).toFixed(4);
-                    row.push(winProbability);
-                }
-            });
-            table.push(row);
-        });
-
-        console.log('Probability of the win for the user:');
-        console.log(table.toString());
+        console.log("0 - 0");
+        console.log("1 - 1");
+        console.log("2 - 2");
+        console.log("3 - 3");
+        console.log("4 - 4");
+        console.log("5 - 5");
         console.log("X - exit");
+        console.log("? - help");
+        return { key, value: randomValue };
     }
+
 
     calculateWinProbability(userDie, computerDie) {
         let userWins = 0;
@@ -135,10 +117,9 @@ class Game {
                 selection = parseInt(selection, 10);
                 this.userDice = this.dice[selection];
                 console.log(`You choose the [${this.userDice.values.join(',')}] dice.`);
-                this.dice.splice(selection, 1); // Remove the selected dice from the list
+                this.dice.splice(selection, 1);
 
-                // Computer selects dice
-                this.computerDice = this.dice[Math.floor(Math.random() * this.dice.length)];
+                this.computerDice = this.dice[crypto.randomInt(this.dice.length)];
                 console.log(`I choose the [${this.computerDice.values.join(',')}] dice.`);
 
                 this.playRounds(rl);
@@ -148,10 +129,12 @@ class Game {
         diceSelection();
     }
 
+
     playRounds(rl) {
         console.log("It's time for my throw.");
-        const { key: computerKey, value: computerValue } = this.generateFairThrow();
-
+        const { key: computerKey, value: computerValue } = this.generateFairThrow(); // Computer's first throw
+    
+        // Start the first throw (computer)
         const userThrow = () => {
             rl.question('Add your number modulo 6 (0 to 5): ', (userValue) => {
                 if (userValue.toLowerCase() === 'x') {
@@ -164,11 +147,14 @@ class Game {
                     return;
                 }
                 userValue = parseInt(userValue, 10);
+    
+                // Calculate the result of both throws and print the throw results
                 const result = (computerValue + userValue) % 6;
                 console.log(`My number is ${computerValue} (KEY=${computerKey.toString('hex')}).`);
                 console.log(`The result is ${computerValue} + ${userValue} = ${result} (mod 6).`);
                 console.log(`My throw is ${this.computerDice.roll(result)}.`);
-
+    
+                // Now, for the second throw (user)
                 const { key: userKey, value: userThrowValue } = this.generateFairThrow();
                 rl.question('Add your number modulo 6 (0 to 5): ', (userValue) => {
                     if (userValue.toLowerCase() === 'x') {
@@ -181,36 +167,36 @@ class Game {
                         return;
                     }
                     userValue = parseInt(userValue, 10);
-                    const result = (userThrowValue + userValue) % 6;
+    
+                    // Calculate the result for user
+                    const resultUser = (userThrowValue + userValue) % 6;
                     console.log(`My number is ${userThrowValue} (KEY=${userKey.toString('hex')}).`);
-                    console.log(`The result is ${userThrowValue} + ${userValue} = ${result} (mod 6).`);
-                    console.log(`Your throw is ${this.userDice.roll(result)}.`);
-
-                    if (this.userDice.roll(result) > this.computerDice.roll(result)) {
+                    console.log(`The result is ${userThrowValue} + ${userValue} = ${resultUser} (mod 6).`);
+                    console.log(`Your throw is ${this.userDice.roll(resultUser)}.`);
+    
+                    // Now compare the results to determine the winner
+                    const userScore = this.userDice.roll(resultUser);
+                    const computerScore = this.computerDice.roll(result);
+    
+                    if (userScore > computerScore) {
                         console.log("You win!");
-                    } else if (this.userDice.roll(result) < this.computerDice.roll(result)) {
+                        console.log(`${userScore} > ${computerScore}`);
+                    } else if (userScore < computerScore) {
                         console.log("I win!");
+                        console.log(`${computerScore} > ${userScore}`);
                     } else {
                         console.log("It's a tie!");
                     }
-
+    
                     rl.close();
                 });
             });
         };
-
+    
         userThrow();
     }
+    
+
 }
 
-// Parsing command line arguments
-const args = process.argv.slice(2);
-if (args.length < 3) {
-    console.error("Error: You must provide at least 3 dice.");
-    console.error("Example: node game.js 2,2,4,4,9,9 6,8,1,1,8,6 7,5,3,7,5,3");
-    process.exit(1);
-}
-
-const diceList = args.map(arg => new Dice(arg.split(',').map(Number)));
-const game = new Game(diceList);
-game.start();
+module.exports = Game;
